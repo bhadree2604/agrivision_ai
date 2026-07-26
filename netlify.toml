@@ -1,6 +1,7 @@
 [build]
   publish = "."
-  
+  command = "node -e \"const fs=require('fs'); let c=fs.readFileSync('config.js','utf8'); c=c.replace(\\\"window.PLANT_ID_API_KEY = '';\\\", \\\"window.PLANT_ID_API_KEY = '\\\" + (process.env.PLANT_ID_API_KEY||'') + \\\"';\\\"); fs.writeFileSync('config.js',c);\""
+
 [[redirects]]
   from = "/*"
   to = "/index.html"

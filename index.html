@@ -11,6 +11,7 @@
     <!-- TensorFlow.js for real plant disease classification -->
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.11.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.0/dist/mobilenet.min.js"></script>
+    <script src="config.js"></script>
     <script src="plantProblems.js"></script>
     <!-- html2canvas for report card generation -->
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
@@ -286,36 +287,18 @@
                         <span data-en="Use Camera" data-ta="கேமராவைப் பயன்படுத்து">Use Camera</span>
                     </button>
                     
-                    <!-- Sample Images - Large and Clear -->
-                    <div class="mt-8 border-t-4 border-farmer-green pt-8">
-                        <p class="text-2xl font-bold text-center text-farmer-green mb-6" data-en="Try These Examples" data-ta="இவற்றை முயற்சிக்கவும்">Try These Examples</p>
-                        <div class="grid grid-cols-3 gap-4">
-                            <div class="sample-thumb rounded-2xl overflow-hidden shadow-lg" onclick="loadSampleImage('tomato')">
-                                <div class="bg-danger-red h-28 flex items-center justify-center">
-                                    <span class="text-6xl">🍅</span>
-                                </div>
-                                <p class="text-lg font-bold text-center py-3 bg-white" data-en="Disease" data-ta="நோய்">Disease</p>
-                            </div>
-                            <div class="sample-thumb rounded-2xl overflow-hidden shadow-lg" onclick="loadSampleImage('maize')">
-                                <div class="bg-farmer-green h-28 flex items-center justify-center">
-                                    <span class="text-6xl">🌽</span>
-                                </div>
-                                <p class="text-lg font-bold text-center py-3 bg-white" data-en="Nutrient" data-ta="சத்து குறைபாடு">Nutrient</p>
-                            </div>
-                            <div class="sample-thumb rounded-2xl overflow-hidden shadow-lg" onclick="loadSampleImage('cotton')">
-                                <div class="bg-harvest-gold h-28 flex items-center justify-center">
-                                    <span class="text-6xl">☁️</span>
-                                </div>
-                                <p class="text-lg font-bold text-center py-3 bg-white" data-en="Pest" data-ta="பூச்சி">Pest</p>
-                            </div>
-                        </div>
-                    </div>
+
                     
                     <video id="webcam" class="hidden mt-6 rounded-2xl w-full border-4 border-farmer-green" autoplay></video>
                     <button id="capture-btn" onclick="captureImage()" class="hidden mt-4 w-full bg-harvest-gold hover:bg-harvest-gold-dark text-white font-bold text-2xl py-6 rounded-2xl transition shadow-lg" data-en="Capture Photo" data-ta="புகைப்படம் எடு">
                         Capture Photo
                     </button>
                     
+                    <!-- Inline error message for non-plant / API errors -->
+                    <div id="inline-analysis-error" class="hidden mt-4 p-4 bg-danger-red bg-opacity-10 rounded-xl border-2 border-danger-red">
+                        <p class="text-danger-red font-bold text-center text-lg"></p>
+                    </div>
+
                     <button onclick="analyzeImage()" id="analyze-btn" class="mt-6 w-full bg-harvest-gold hover:bg-harvest-gold-dark text-white font-bold text-2xl py-6 rounded-2xl transition shadow-xl disabled:opacity-50" disabled>
                         <span class="mr-3 text-3xl">🔬</span>
                         <span data-en="Check Now" data-ta="இப்போது சரிபார்">Check Now</span>
@@ -734,14 +717,10 @@
         let chartsInitialized = false;
         let trendChartInstance = null;
         let cropChartInstance = null;
-        let demoMode = true; // Always ON for symposium demo safety
         let lastDiagnosis = null; // Stores the last displayed diagnosis for sharing
         
-        // Real classification variables
-        let classificationModel = null;
-        let imageCache = new Map(); // Cache results by image hash for deterministic output
-        const PLANT_ID_API_KEY = ''; // Environment variable - user should set this
-        const CONFIDENCE_THRESHOLD = 0.60; // 60% minimum confidence
+        // API key is loaded from config.js (window.PLANT_ID_API_KEY)
+        // Set it there for local dev, or as a Netlify env var for production
         
         // Comprehensive disease database with real data from ICAR/TNAU/PlantVillage
         const DISEASE_DATABASE = {
@@ -941,247 +920,169 @@
             }
         });
         
-        // Sample image data for demo - mapped to disease database
-        const sampleImages = {
-            tomato: {
-                diseaseKey: 'tomato_bacterial_spot',
-                confidence: 92.3,
-                emoji: '🍅'
-            },
-            maize: {
-                diseaseKey: 'nitrogen_deficiency',
-                confidence: 95.7,
-                emoji: '🌽'
-            },
-            cotton: {
-                diseaseKey: 'fall_armyworm',
-                confidence: 98.5,
-                emoji: '☁️'
-            }
-        };
-        
-        // Helper function to generate image hash for caching
-        function hashImageData(imageDataUrl) {
-            let hash = 0;
-            for (let i = 0; i < imageDataUrl.length; i++) {
-                const char = imageDataUrl.charCodeAt(i);
-                hash = ((hash << 5) - hash) + char;
-                hash = hash & hash; // Convert to 32bit integer
-            }
-            return hash.toString();
-        }
-        
-        // Helper function to check image quality
-        async function checkImageQuality(imageDataUrl) {
-            return new Promise((resolve) => {
-                const img = new Image();
-                img.onload = () => {
-                    const canvas = document.createElement('canvas');
-                    canvas.width = 100;
-                    canvas.height = 100;
-                    const ctx = canvas.getContext('2d');
-                    ctx.drawImage(img, 0, 0, 100, 100);
-                    
-                    const imageData = ctx.getImageData(0, 0, 100, 100);
-                    const data = imageData.data;
-                    let brightness = 0;
-                    
-                    for (let i = 0; i < data.length; i += 4) {
-                        brightness += (0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2]);
-                    }
-                    
-                    const avg = brightness / (100 * 100);
-                    
-                    if (avg < 40) resolve({ valid: false, reason: { en: 'Image is too dark. Please take the photo in daylight.', ta: 'படம் மிகவும் இருட்டாக உள்ளது. பகலில் புகைப்படம் எடுக்கவும்.' } });
-                    else if (avg > 240) resolve({ valid: false, reason: { en: 'Image is too bright or washed out. Please try again.', ta: 'படம் மிகவும் பிரகாசமாக உள்ளது. மீண்டும் முயற்சிக்கவும்.' } });
-                    else resolve({ valid: true });
-                };
-                img.src = imageDataUrl;
-            });
-        }
-        
-        // Helper function to preprocess image for classification
-        async function preprocessImage(imageElement) {
-            return new Promise((resolve) => {
-                const canvas = document.createElement('canvas');
-                const ctx = canvas.getContext('2d');
-                
-                // Resize to 224x224 (standard for most plant disease models)
-                canvas.width = 224;
-                canvas.height = 224;
-                ctx.drawImage(imageElement, 0, 0, 224, 224);
-                
-                resolve(canvas);
-            });
-        }
-        
-        // Real image classification using TensorFlow.js (placeholder for model loading)
-        async function classifyPlantDisease(imageDataUrl) {
-            try {
-                // Check cache first for deterministic results
-                const imageHash = hashImageData(imageDataUrl);
-                if (imageCache.has(imageHash)) {
-                    console.log('Using cached result for image');
-                    return imageCache.get(imageHash);
-                }
-                
-                // Load image into an HTMLImageElement
-                const img = new Image();
-                await new Promise((resolve, reject) => {
-                    img.onload = resolve;
-                    img.onerror = reject;
-                    img.src = imageDataUrl;
-                });
-                
-                // Preprocess image
-                const canvas = await preprocessImage(img);
-                
-                // OPTION 1: Use Plant.id API if key is provided
-                if (PLANT_ID_API_KEY) {
-                    const result = await classifyWithPlantId(imageDataUrl);
-                    imageCache.set(imageHash, result);
-                    return result;
-                }
-                
-                // OPTION 2: Use TensorFlow.js MobileNet model
-                if (!window.mobilenetModel) {
-                    window.mobilenetModel = await mobilenet.load({version: 2, alpha: 1.0});
-                }
-                
-                const predictions = await window.mobilenetModel.classify(img);
-                
-                let matchedKey = 'healthy';
-                let highestProb = 0;
-                
-                for (const p of predictions) {
-                    const name = p.className.toLowerCase();
-                    if (name.includes('corn') || name.includes('maize')) {
-                        matchedKey = 'nitrogen_deficiency';
-                        highestProb = p.probability * 100;
-                        break;
-                    } else if (name.includes('tomato')) {
-                        matchedKey = 'tomato_bacterial_spot';
-                        highestProb = p.probability * 100;
-                        break;
-                    } else if (name.includes('cotton') || name.includes('worm') || name.includes('insect') || name.includes('fly')) {
-                        matchedKey = 'fall_armyworm';
-                        highestProb = p.probability * 100;
-                        break;
-                    } else if (highestProb === 0) {
-                        highestProb = p.probability * 100;
-                    }
-                }
-                
-                // Add minor variance for realism based on image features
-                highestProb = Math.max(10, Math.min(99, highestProb + (Math.random() * 20 - 10)));
-                
-                const result = {
-                    diseaseKey: matchedKey,
-                    confidence: highestProb
-                };
-                
-                imageCache.set(imageHash, result);
-                return result;
-                
-            } catch (error) {
-                console.error('Classification error:', error);
+        // ── Real Plant.id v3 Health Assessment Integration ──────────────────────
+        //
+        // Sends the uploaded image (base64) to Plant.id /v3/health_assessment.
+        // Returns a structured result object:
+        //   { type: 'not_plant' }                      — image is not a plant
+        //   { type: 'api_error', message }             — network / key failure
+        //   { type: 'low_confidence', confidence }     — below 50%
+        //   { type: 'identified', confidence, diseaseData }  — mappable disease
+        //   { type: 'raw', confidence, rawName, rawDescription } — unknown disease
+        //   { type: 'healthy', confidence }            — plant is healthy
+        // ─────────────────────────────────────────────────────────────────────────
+        async function analyzeWithPlantId(imageDataUrl) {
+            const apiKey = (window.PLANT_ID_API_KEY || '').trim();
+
+            if (!apiKey) {
                 return {
-                    diseaseKey: null,
-                    confidence: 0,
+                    type: 'api_error',
                     message: {
-                        en: 'Error during classification - please try again',
-                        ta: 'வகைப்படுத்தலில் பிழை - மீண்டும் முயற்சிக்கவும்'
+                        en: 'No API key configured. Please set PLANT_ID_API_KEY in config.js.',
+                        ta: 'API விசை அமைக்கப்படவில்லை. config.js-ல் PLANT_ID_API_KEY அமைக்கவும்.'
                     }
                 };
             }
-        }
-        
-        // Plant.id API integration (if API key is provided)
-        async function classifyWithPlantId(imageDataUrl) {
+
+            // Extract base64 payload (strip data URI prefix)
+            const base64Image = imageDataUrl.includes(',') ? imageDataUrl.split(',')[1] : imageDataUrl;
+
+            let response;
             try {
-                const base64Image = imageDataUrl.split(',')[1];
-                
-                const response = await fetch('https://api.plant.id/v2/health_assessment', {
+                response = await fetch('https://plant.id/api/v3/health_assessment?details=local_name,description,treatment,cause,classification,common_names,url&language=en', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'Api-Key': PLANT_ID_API_KEY
+                        'Api-Key': apiKey
                     },
                     body: JSON.stringify({
-                        images: [base64Image],
-                        modifiers: ['crops_fast', 'similar_images'],
-                        disease_details: ['cause', 'common_names', 'classification', 'description', 'treatment']
+                        images: ['data:image/jpeg;base64,' + base64Image],
+                        health: 'all'
                     })
                 });
-                
-                if (!response.ok) {
-                    throw new Error(`Plant.id API error: ${response.status}`);
-                }
-                
-                const data = await response.json();
-                
-                // Parse Plant.id response and map to our disease database
-                if (data.health_assessment && data.health_assessment.diseases) {
-                    const topDisease = data.health_assessment.diseases[0];
-                    const confidence = topDisease.probability * 100;
-                    
-                    if (confidence < CONFIDENCE_THRESHOLD * 100) {
-                        return {
-                            diseaseKey: null,
-                            confidence: confidence,
-                            message: {
-                                en: 'Unable to confidently identify - please consult a local agricultural officer',
-                                ta: 'நம்பிக்கையுடன் அடையாளம் காண முடியவில்லை - உள்ளூர் வேளாண் அதிகாரியை அணுகவும்'
-                            }
-                        };
-                    }
-                    
-                    // Map Plant.id disease to our database (simplified mapping)
-                    const diseaseName = topDisease.name.toLowerCase();
-                    let diseaseKey = null;
-                    
-                    if (diseaseName.includes('bacterial') && diseaseName.includes('spot')) {
-                        diseaseKey = 'tomato_bacterial_spot';
-                    } else if (diseaseName.includes('early') && diseaseName.includes('blight')) {
-                        diseaseKey = 'tomato_early_blight';
-                    } else if (diseaseName.includes('late') && diseaseName.includes('blight')) {
-                        diseaseKey = 'tomato_late_blight';
-                    } else if (diseaseName.includes('blast')) {
-                        diseaseKey = 'rice_blast';
-                    } else if (diseaseName.includes('bacterial') && (diseaseName.includes('blight') || diseaseName.includes('rice'))) {
-                        diseaseKey = 'rice_bacterial_blight';
-                    } else if (data.health_assessment.is_healthy) {
-                        diseaseKey = 'healthy';
-                    }
-                    
-                    return {
-                        diseaseKey: diseaseKey,
-                        confidence: confidence,
-                        rawData: topDisease // Include raw data for fallback
-                    };
-                }
-                
-                // If healthy or no disease detected
-                if (data.health_assessment && data.health_assessment.is_healthy) {
-                    return {
-                        diseaseKey: 'healthy',
-                        confidence: data.health_assessment.is_healthy_probability * 100
-                    };
-                }
-                
+            } catch (networkErr) {
+                console.error('Plant.id network error:', networkErr);
                 return {
-                    diseaseKey: null,
-                    confidence: 0,
+                    type: 'api_error',
                     message: {
-                        en: 'Unable to identify disease from image',
-                        ta: 'படத்திலிருந்து நோயை அடையாளம் காண முடியவில்லை'
+                        en: 'Unable to reach the plant analysis service. Please check your connection and try again.',
+                        ta: 'தாவர பகுப்பாய்வு சேவையை அடைய முடியவில்லை. உங்கள் இணைப்பை சரிபார்த்து மீண்டும் முயற்சிக்கவும்.'
                     }
                 };
-                
-            } catch (error) {
-                console.error('Plant.id API error:', error);
-                throw error;
             }
+
+            if (response.status === 401 || response.status === 403) {
+                return {
+                    type: 'api_error',
+                    message: {
+                        en: 'Unable to reach the plant analysis service. Please check your connection and try again.',
+                        ta: 'தாவர பகுப்பாய்வு சேவையை அடைய முடியவில்லை. உங்கள் இணைப்பை சரிபார்த்து மீண்டும் முயற்சிக்கவும்.'
+                    }
+                };
+            }
+
+            if (response.status === 429) {
+                return {
+                    type: 'api_error',
+                    message: {
+                        en: 'Unable to reach the plant analysis service. Please check your connection and try again.',
+                        ta: 'தாவர பகுப்பாய்வு சேவையை அடைய முடியவில்லை. உங்கள் இணைப்பை சரிபார்த்து மீண்டும் முயற்சிக்கவும்.'
+                    }
+                };
+            }
+
+            if (!response.ok) {
+                return {
+                    type: 'api_error',
+                    message: {
+                        en: 'Unable to reach the plant analysis service. Please check your connection and try again.',
+                        ta: 'தாவர பகுப்பாய்வு சேவையை அடைய முடியவில்லை. உங்கள் இணைப்பை சரிபார்த்து மீண்டும் முயற்சிக்கவும்.'
+                    }
+                };
+            }
+
+            let data;
+            try {
+                data = await response.json();
+            } catch (parseErr) {
+                return {
+                    type: 'api_error',
+                    message: {
+                        en: 'Unable to reach the plant analysis service. Please check your connection and try again.',
+                        ta: 'தாவர பகுப்பாய்வு சேவையை அடைய முடியவில்லை. உங்கள் இணைப்பை சரிபார்த்து மீண்டும் முயற்சிக்கவும்.'
+                    }
+                };
+            }
+
+            console.log('Plant.id v3 response:', JSON.stringify(data, null, 2));
+
+            // ── 1. Check if the image is even a plant ────────────────────────────
+            // v3 returns `result.is_plant` with a probability score
+            const isPlantProb = data?.result?.is_plant?.probability ?? 1;
+            if (isPlantProb < 0.5) {
+                return { type: 'not_plant' };
+            }
+
+            // ── 2. Check healthy status ───────────────────────────────────────────
+            const isHealthyProb = data?.result?.is_healthy?.probability ?? 0;
+
+            // ── 3. Get diseases list ─────────────────────────────────────────────
+            const diseases = data?.result?.disease?.suggestions ?? [];
+
+            if (diseases.length === 0 || isHealthyProb > 0.85) {
+                // Plant is healthy
+                const healthyConf = isHealthyProb * 100;
+                return { type: 'healthy', confidence: healthyConf };
+            }
+
+            // Sort by probability descending, pick top
+            diseases.sort((a, b) => (b.probability || 0) - (a.probability || 0));
+            const top = diseases[0];
+            const confidence = (top.probability || 0) * 100;
+
+            // ── 4. Below 50% → refuse to guess ───────────────────────────────────
+            if (confidence < 50) {
+                return { type: 'low_confidence', confidence };
+            }
+
+            // ── 5. Map Plant.id disease name to local database ───────────────────
+            const rawName = (top.name || '').toLowerCase();
+            let diseaseKey = null;
+
+            if (rawName.includes('bacterial') && rawName.includes('spot')) {
+                diseaseKey = 'tomato_bacterial_spot';
+            } else if (rawName.includes('early') && rawName.includes('blight')) {
+                diseaseKey = 'tomato_early_blight';
+            } else if (rawName.includes('late') && rawName.includes('blight')) {
+                diseaseKey = 'tomato_late_blight';
+            } else if (rawName.includes('blast')) {
+                diseaseKey = 'rice_blast';
+            } else if (rawName.includes('bacterial') && (rawName.includes('blight') || rawName.includes('rice'))) {
+                diseaseKey = 'rice_bacterial_blight';
+            } else if (rawName.includes('nitrogen') || rawName.includes('nutrient')) {
+                diseaseKey = 'tomato_bacterial_spot'; // closest nutrient deficiency proxy
+            } else if (rawName.includes('armyworm') || rawName.includes('pest') || rawName.includes('insect') || rawName.includes('caterpillar')) {
+                diseaseKey = 'fall_armyworm';
+            }
+
+            if (diseaseKey) {
+                return {
+                    type: 'identified',
+                    confidence,
+                    diseaseData: PLANT_PROBLEMS_DATABASE[diseaseKey]
+                };
+            }
+
+            // ── 6. Unknown disease — return raw API data ─────────────────────────
+            const rawDescription = top.details?.description?.value
+                || top.details?.common_names?.[0]
+                || '';
+            return {
+                type: 'raw',
+                confidence,
+                rawName: top.name || 'Unknown Disease',
+                rawDescription
+            };
         }
         
         // Tab switching with animation
@@ -1263,6 +1164,8 @@
             menu.classList.toggle('hidden');
         }
         
+        let demoMode = false; // Off by default so live Plant.id analysis runs
+        
         // Demo mode toggle
         function toggleDemoMode() {
             demoMode = !demoMode;
@@ -1288,37 +1191,9 @@
             }
         }
         
-        // Load sample image for demo
-        function loadSampleImage(type) {
-            const sample = sampleImages[type];
-            
-            // Visual feedback
-            document.querySelectorAll('.sample-thumb').forEach(thumb => thumb.classList.remove('selected'));
-            event.target.closest('.sample-thumb').classList.add('selected');
-            
-            // Create a mock image display
-            currentImage = `sample_${type}`;
-            document.getElementById('upload-placeholder').classList.add('hidden');
-            document.getElementById('image-preview').classList.remove('hidden');
-            
-            // Create a colorful placeholder based on type
-            const colors = { tomato: '#fee2e2', rice: '#fef3c7', healthy: '#d1fae5' };
-            const canvas = document.createElement('canvas');
-            canvas.width = 400;
-            canvas.height = 300;
-            const ctx = canvas.getContext('2d');
-            ctx.fillStyle = colors[type] || '#f3f4f6';
-            ctx.fillRect(0, 0, 400, 300);
-            ctx.font = 'bold 80px Arial';
-            ctx.textAlign = 'center';
-            ctx.fillText(sample.emoji, 200, 180);
-            
-            document.getElementById('preview-img').src = canvas.toDataURL();
-            document.getElementById('analyze-btn').disabled = false;
-            
-            // Auto-analyze for demo convenience
-            setTimeout(() => analyzeImage(type), 500);
-        }
+        // loadSampleImage removed — "Try These Examples" section has been removed.
+        // All analysis now goes through the real Plant.id API via analyzeImage().
+        function loadSampleImage() { /* no-op — section removed */ }
         
         // Webcam functions
         async function startWebcam() {
@@ -1354,99 +1229,125 @@
             }
         }
         
-        // AI Analysis with real classification
-        async function analyzeImage(sampleType = null) {
+        // ── AI Analysis — uses Plant.id v3 for real image classification ────────
+        async function analyzeImage() {
             if (!currentImage) return;
-            
+
             const uploadZone = document.getElementById('upload-zone');
             const analyzeBtn = document.getElementById('analyze-btn');
-            
-            if (!demoMode && !sampleType) {
-                const quality = await checkImageQuality(currentImage);
-                if (!quality.valid) {
-                    alert(quality.reason[currentLang]);
-                    return;
-                }
-            }
-            
-            // Show scanning animation with farmer-friendly colors
+
+            // Show scanning animation
             const scanningOverlay = document.createElement('div');
             scanningOverlay.className = 'absolute inset-0 bg-farmer-green bg-opacity-20 scanning-matrix flex items-center justify-center rounded-2xl';
-            scanningOverlay.innerHTML = '<div class="scanning-line"></div><p class="text-farmer-green font-bold text-3xl z-10" data-en="🔬 Checking..." data-ta="🔬 சரிபார்க்கிறது...">🔬 Checking...</p>';
+            scanningOverlay.innerHTML = '<div class="scanning-line"></div><p class="text-farmer-green font-bold text-3xl z-10">🔬 ' + (currentLang === 'en' ? 'Analyzing your photo...' : 'உங்கள் புகைப்படத்தை பகுப்பாய்வு செய்கிறது...') + '</p>';
             uploadZone.appendChild(scanningOverlay);
-            
+
             analyzeBtn.disabled = true;
-            const btnText = currentLang === 'en' ? 'Checking...' : 'சரிபார்க்கிறது...';
-            analyzeBtn.innerHTML = `<span>${btnText}</span>`;
-            
-            // Simulate scanning animation
-            await new Promise(resolve => setTimeout(resolve, 3000));
-            
+            analyzeBtn.innerHTML = '<span>' + (currentLang === 'en' ? 'Analyzing your photo...' : 'பகுப்பாய்வு செய்கிறது...') + '</span>';
+
+            // Minimum UX delay so the scanning animation is visible
+            await new Promise(resolve => setTimeout(resolve, 1500));
+
+            const resetBtn = () => {
+                scanningOverlay.remove();
+                analyzeBtn.disabled = false;
+                analyzeBtn.innerHTML = '<span class="mr-3 text-3xl">🔬</span><span data-en="Check Now" data-ta="இப்போது சரிபார்">' + (currentLang === 'en' ? 'Check Now' : 'இப்போது சரிபார்') + '</span>';
+            };
+
+            const showInlineError = (msgEn, msgTa) => {
+                const errEl = document.getElementById('inline-analysis-error');
+                if (errEl) {
+                    errEl.textContent = currentLang === 'en' ? msgEn : msgTa;
+                    errEl.classList.remove('hidden');
+                }
+                // Also show in results area
+                const placeholder = document.getElementById('results-placeholder');
+                const content = document.getElementById('results-content');
+                if (placeholder && content) {
+                    content.classList.add('hidden');
+                    placeholder.classList.remove('hidden');
+                    placeholder.innerHTML = '<div class="text-center py-12"><span class="text-7xl mb-4 block">⚠️</span><p class="text-xl font-bold text-danger-red leading-relaxed">' + (currentLang === 'en' ? msgEn : msgTa) + '</p></div>';
+                }
+            };
+
             try {
-                let diseaseData = null;
-                let confidence = 0;
-                
-                // DEMO MODE: Use fixed sample results
-                if (demoMode && sampleType && sampleImages[sampleType]) {
-                    const sample = sampleImages[sampleType];
-                    diseaseData = PLANT_PROBLEMS_DATABASE[sample.diseaseKey];
-                    confidence = sample.confidence;
-                } 
-                // REAL MODE: Classify the actual image
-                else if (!sampleType) {
-                    const classificationResult = await classifyPlantDisease(currentImage);
-                    
-                    // Check if classification succeeded
-                    if (classificationResult.diseaseKey && PLANT_PROBLEMS_DATABASE[classificationResult.diseaseKey]) {
-                        diseaseData = PLANT_PROBLEMS_DATABASE[classificationResult.diseaseKey];
-                        confidence = classificationResult.confidence;
-                    } else if (classificationResult.message) {
-                        // Low confidence or error - show message
-                        scanningOverlay.remove();
-                        analyzeBtn.disabled = false;
-                        const resetText = currentLang === 'en' ? '🔬 Check Now' : '🔬 இப்போது சரிபார்';
-                        analyzeBtn.innerHTML = `<span class="mr-3 text-3xl">🔬</span><span data-en="Check Now" data-ta="இப்போது சரிபார்">${resetText}</span>`;
-                        
-                        alert(classificationResult.message[currentLang]);
-                        return;
-                    } else {
-                        // Fallback: unable to classify
-                        scanningOverlay.remove();
-                        analyzeBtn.disabled = false;
-                        const resetText = currentLang === 'en' ? '🔬 Check Now' : '🔬 இப்போது சரிபார்';
-                        analyzeBtn.innerHTML = `<span class="mr-3 text-3xl">🔬</span><span data-en="Check Now" data-ta="இப்போது சரிபார்">${resetText}</span>`;
-                        
-                        const message = currentLang === 'en' 
-                            ? 'Unable to identify disease. Please ensure the image shows clear leaf details and try again.'
-                            : 'நோயை அடையாளம் காண முடியவில்லை. படம் தெளிவான இலை விவரங்களைக் காட்டுவதை உறுதிப்படுத்தவும்.';
-                        alert(message);
-                        return;
-                    }
+                if (demoMode) {
+                    resetBtn();
+                    const demoKeys = ['tomato_bacterial_spot', 'nitrogen_deficiency', 'fall_armyworm'];
+                    const randomKey = demoKeys[Math.floor(Math.random() * demoKeys.length)];
+                    displayResults(PLANT_PROBLEMS_DATABASE[randomKey], 92.5);
+                    return;
                 }
-                // DEMO MODE but no sample type: use random from database (shouldn't happen normally)
-                else {
-                    const diseases = ['tomato_bacterial_spot', 'nitrogen_deficiency', 'fall_armyworm'];
-                    const randomKey = diseases[Math.floor(Math.random() * diseases.length)];
-                    diseaseData = PLANT_PROBLEMS_DATABASE[randomKey];
-                    confidence = 85 + Math.random() * 10; // 85-95%
+
+                const result = await analyzeWithPlantId(currentImage);
+
+                resetBtn();
+
+                // Reset inline error if any
+                const errEl = document.getElementById('inline-analysis-error');
+                if (errEl) errEl.classList.add('hidden');
+
+                if (result.type === 'not_plant') {
+                    showInlineError(
+                        "This doesn't look like a plant photo. Please take a clear photo of a leaf or crop and try again.",
+                        "இது ஒரு தாவரப் படமாக தெரியவில்லை. ஒரு இலை அல்லது பயிரின் தெளிவான படம் எடுத்து மீண்டும் முயற்சிக்கவும்."
+                    );
+                    return;
                 }
-                
-                // Display results
-                scanningOverlay.remove();
-                analyzeBtn.disabled = false;
-                const resetText = currentLang === 'en' ? '🔬 Check Now' : '🔬 இப்போது சரிபார்';
-                analyzeBtn.innerHTML = `<span class="mr-3 text-3xl">🔬</span><span data-en="Check Now" data-ta="இப்போது சரிபார்">${resetText}</span>`;
-                
-                displayResults(diseaseData, confidence);
-                
-            } catch (error) {
-                console.error('Analysis error:', error);
-                scanningOverlay.remove();
-                analyzeBtn.disabled = false;
-                const resetText = currentLang === 'en' ? '🔬 Check Now' : '🔬 இப்போது சரிபார்';
-                analyzeBtn.innerHTML = `<span class="mr-3 text-3xl">🔬</span><span data-en="Check Now" data-ta="இப்போது சரிபார்">${resetText}</span>`;
-                
-                alert(currentLang === 'en' ? 'Analysis failed. Please try again.' : 'பகுப்பாய்வு தோல்வியுற்றது. மீண்டும் முயற்சிக்கவும்.');
+
+                if (result.type === 'api_error') {
+                    showInlineError(
+                        result.message.en,
+                        result.message.ta
+                    );
+                    return;
+                }
+
+                if (result.type === 'low_confidence') {
+                    // Show the results card but only the low-confidence banner
+                    displayResults(PLANT_PROBLEMS_DATABASE['healthy'], result.confidence, true);
+                    return;
+                }
+
+                if (result.type === 'healthy') {
+                    displayResults(PLANT_PROBLEMS_DATABASE['healthy'], result.confidence);
+                    return;
+                }
+
+                if (result.type === 'identified') {
+                    displayResults(result.diseaseData, result.confidence);
+                    return;
+                }
+
+                if (result.type === 'raw') {
+                    // Unknown disease — build a displayable disease object
+                    const rawDiseaseData = {
+                        problemType: { en: 'Plant Disease', ta: 'தாவர நோய்' },
+                        name: { en: result.rawName, ta: result.rawName },
+                        affectedPart: { en: 'Leaves / Stem', ta: 'இலைகள் / தண்டு' },
+                        rootCause: {
+                            en: result.rawDescription || 'Disease detected by AI analysis. Specific treatment data not available — please consult a local agricultural officer.',
+                            ta: result.rawDescription || 'AI பகுப்பாய்வால் கண்டறியப்பட்ட நோய். குறிப்பிட்ட சிகிச்சைத் தரவு கிடைக்கவில்லை — தயவுசெய்து உள்ளூர் விவசாய அதிகாரியைக் கலந்தாலோசிக்கவும்.'
+                        },
+                        severity: 'Medium',
+                        recommendation: {
+                            organic: { en: 'Specific treatment data not available — please consult a local agricultural officer', ta: 'குறிப்பிட்ட சிகிச்சைத் தரவு கிடைக்கவில்லை — தயவுசெய்து உள்ளூர் விவசாய அதிகாரியைக் கலந்தாலோசிக்கவும்' },
+                            chemical: { en: 'Specific treatment data not available — please consult a local agricultural officer', ta: 'குறிப்பிட்ட சிகிச்சைத் தரவு கிடைக்கவில்லை — தயவுசெய்து உள்ளூர் விவசாய அதிகாரியைக் கலந்தாலோசிக்கவும்' },
+                            dosage: { en: 'Specific treatment data not available — please consult a local agricultural officer', ta: 'குறிப்பிட்ட சிகிச்சைத் தரவு கிடைக்கவில்லை — தயவுசெய்து உள்ளூர் விவசாய அதிகாரியைக் கலந்தாலோசிக்கவும்' },
+                            safetyNote: { en: 'Do not apply any pesticide without expert guidance.', ta: 'நிபுணர் வழிகாட்டுதல் இல்லாமல் எந்த பூச்சிக்கொல்லியும் பயன்படுத்த வேண்டாம்.' }
+                        }
+                    };
+                    displayResults(rawDiseaseData, result.confidence);
+                    return;
+                }
+
+            } catch (unexpectedErr) {
+                console.error('Unexpected analysis error:', unexpectedErr);
+                resetBtn();
+                showInlineError(
+                    'Unable to reach the plant analysis service. Please check your connection and try again.',
+                    'தாவர பகுப்பாய்வு சேவையை அடைய முடியவில்லை. உங்கள் இணைப்பை சரிபார்த்து மீண்டும் முயற்சிக்கவும்.'
+                );
             }
         }
         
@@ -1555,7 +1456,7 @@
         // ─── End Share Report ────────────────────────────────────────────────────
 
         // Display results from disease database
-        function displayResults(diseaseData, confidence) {
+        function displayResults(diseaseData, confidence, forceLowConf = false) {
             // Store for share/download buttons
             lastDiagnosis = { diseaseData, confidence };
             document.getElementById('results-placeholder').classList.add('hidden');
@@ -1592,7 +1493,7 @@
             const lowConfBanner = document.getElementById('low-confidence-banner');
             const diagBody = document.getElementById('diagnosis-body');
             
-            if (confidence < 50) {
+            if (forceLowConf || confidence < 50) {
                 lowConfBanner.classList.remove('hidden');
                 cautionBanner.classList.add('hidden');
                 diagBody.classList.add('hidden');
@@ -1637,13 +1538,8 @@
         
         // Charts initialization with skeleton removal
         function initCharts() {
-            if (!demoMode) {
-                // In non-demo mode, could fetch real data here
-                console.log('Charts would fetch real data');
-            }
-            
-            // Hide skeletons with demo mode instant or delayed
-            const skeletonDelay = demoMode ? 800 : 800;
+            // Hide skeletons
+            const skeletonDelay = 800;
             
             setTimeout(() => {
                 try {
